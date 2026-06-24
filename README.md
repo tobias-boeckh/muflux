@@ -18,3 +18,4 @@ uv pip install -e .
 - `unfolding_example.ipynb` shows an example unfolding for a toy dataset
 - `flux_data.ipynb` is an auxiliary script, to save the hard-coded flux values as numpy arrays
 - `muon_flux.ipynb` shows the unfolding of the above muon flux
+- `muon_flux_large_bins.ipynb` is a copy of `muon_flux.ipynb` using larger momentum bins to achieve are more diagonal migration matrix
