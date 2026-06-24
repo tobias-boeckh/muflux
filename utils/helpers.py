@@ -1,7 +1,9 @@
 import os
 import sys
+from pathlib import Path
 from typing import Any, Callable
 
+import awkward as ak
 import hist
 import matplotlib.pyplot as plt
 import mplhep
@@ -9,10 +11,91 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import uncertainties as unc
+import uproot
 from tqdm import tqdm
 from uncertainties import unumpy as unp
 
 from utils.fit import Fit
+
+
+def get_df(path: Path) -> pd.DataFrame:
+
+    reco_vars = [
+        "run",
+        "eventID",
+        "longTracks",
+        "Track_x0",
+        "Track_y0",
+        "Track_ThetaX_atVetoNu",
+        "Track_ThetaY_atVetoNu",
+        "Track_r_atMaxRadius",
+        "Track_nDoF",
+        "Track_nLayers",
+        "Track_Chi2",
+        "Track_charge",
+        "Track_pz0",
+        "t_pz",
+        "t_st1_pz",
+    ]
+
+    truth_vars = [
+        "run",
+        "eventID",
+        "truth_pdg",
+        "truth_prod_x",
+        "truth_prod_y",
+        "truth_prod_z",
+        "truth_px",
+        "truth_py",
+        "truth_pz",
+    ]
+
+    reco_query = (
+        "(longTracks == 1) & (abs(Track_x0) < 50.0) & (abs(Track_y0) < 50.0)"
+        " & (abs(Track_ThetaX_atVetoNu) < 10e-3) & (abs(Track_ThetaY_atVetoNu) < 10e-3)"
+        " & (Track_r_atMaxRadius < 90) & (Track_nDoF > 9) & (Track_nLayers >= 7)"
+        " & (chi2_ndof < 3.0)"
+    )
+
+    truth_query = (
+        "(abs(truth_prod_x) < 50) & (abs(truth_prod_y) < 50)"
+        " & (abs(truth_tan_theta_x) < 10e-3) & (abs(truth_tan_theta_y) < 10e-3)"
+    )
+
+    MeV_to_GeV = 1e-3
+    reco_df = ak.to_dataframe(
+        uproot.open(path)["nt"].arrays(reco_vars, library="ak"), how="outer"
+    )
+    reco_df["eventID"] = create_unique_event_id(reco_df["eventID"])
+    reco_df["chi2_ndof"] = reco_df["Track_Chi2"] / reco_df["Track_nDoF"]
+    reco_df["Track_pz_gev"] = reco_df["Track_pz0"] * MeV_to_GeV
+    reco_df["Track_qop"] = reco_df["Track_charge"] / reco_df["Track_pz_gev"]
+    reco_df = reco_df.query(reco_query)
+
+    truth_df = ak.to_dataframe(
+        uproot.open(path)["nt"].arrays(truth_vars, library="ak"), how="outer"
+    )
+    # Dataframe contains first 10 truth particles, including secondary electron-positron
+    # pairs if the muon interacts. Select only primary muon.
+    truth_df = truth_df.query(
+        "(abs(truth_pdg) == 13) & (abs(truth_prod_z + 3990) < 1e-3)"
+    )
+    truth_df["eventID"] = create_unique_event_id(truth_df["eventID"])
+    # Create auxilary variables
+    truth_df["truth_tan_theta_x"] = truth_df["truth_px"] / truth_df["truth_pz"]
+    truth_df["truth_tan_theta_y"] = truth_df["truth_py"] / truth_df["truth_pz"]
+    truth_df["truth_pz_gev"] = truth_df["truth_pz"] * MeV_to_GeV
+    truth_df["truth_charge"] = np.where(truth_df["truth_pdg"] == 13, -1, 1)
+    truth_df["truth_qop"] = truth_df["truth_charge"] / truth_df["truth_pz_gev"]
+    # Apply event selection
+    truth_df = truth_df.query(truth_query)
+
+    mu_df = pd.merge(truth_df, reco_df, on="eventID", how="outer")
+
+    assert_msg = "Found reco event without matching truth event"
+    assert len(mu_df.query("truth_pdg.isna()")) == 0, assert_msg
+
+    return mu_df
 
 
 def get_values(
